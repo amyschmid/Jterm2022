@@ -1,0 +1,419 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+# load required libraries
+library(tidyverse)
+library(viridis)
+library(tinytex)
+library(latexpdf)
+library(data.table)
+
+#custom function, calculated the 95% Confidence interval
+conf_int95 <- function(data) {
+  n <- length(data)
+  error <- qt(0.975, df = n - 1) * sd(data) / sqrt(n)
+  return(error)
+}
+
+t.test2 <- function(ID1, ID2, data, parameter = c("mumax", "k", "OD")){
+  n1 <- as.numeric(data[data[["ID"]] == ID1,][4])
+  n2 <- as.numeric(data[data[["ID"]] == ID2,][4])
+  m0 <- 0
+  
+  if (parameter == "mumax"){
+    m1 <- as.numeric(data[data[["ID"]] == ID1,][7])
+    m2 <- as.numeric(data[data[["ID"]] == ID2,][7])
+    s1 <- as.numeric(data[data[["ID"]] == ID1,][8])
+    s2 <- as.numeric(data[data[["ID"]] == ID2,][8])
+    se <- sqrt( (1/n1 + 1/n2) * ((n1-1)*s1^2 + (n2-1)*s2^2)/(n1+n2-2)) 
+    df <- n1+n2-2} 
+  if (parameter == "k"){
+    m1 <- as.numeric(data[data[["ID"]] == ID1,][10])
+    m2 <- as.numeric(data[data[["ID"]] == ID2,][10])
+    s1 <- as.numeric(data[data[["ID"]] == ID1,][12])
+    s2 <- as.numeric(data[data[["ID"]] == ID2,][12])
+    se <- sqrt( (1/n1 + 1/n2) * ((n1-1)*s1^2 + (n2-1)*s2^2)/(n1+n2-2)) 
+    df <- n1+n2-2}
+  
+  t <- (m1-m2-m0)/se 
+    dat <- c(m1-m2, se, t, 2*pt(-abs(t),df))    
+    names(dat) <- c("Difference of means", "Std Error", "t", "p-value")
+    return(dat) 
+}
+
+# set path to datafile
+data <- "20190222_miniterm_hca.csv"
+```
+
+##This is where we load the raw data files from the bioscreen, and your plate layout file (called metafile)
+Some code also removes rows and columns with data we don't need or that are empty.
+```{r}
+# set path to metafile
+  #hint: check that your files are in the correct format and in the same folder at this .rmd file
+
+meta <- ""
+
+## read in metafile
+mt <- read.csv(meta)
+
+## read in datafile
+dt <- read.csv(data) %>%  #remove uncessearry wells and rows
+  .[-(2)] %>% .[-(1:2),]
+
+## set well no as column names
+colnames(dt) <- c("time", seq(1, 200))
+
+## convert clock time to cummulative hours
+hou <- as.numeric(lapply(strsplit(as.character(dt$time), ':'), '[[', 1))
+min <- as.numeric(lapply(strsplit(as.character(dt$time), ':'), '[[', 2))
+sec <- as.numeric(lapply(strsplit(as.character(dt$time), ':'), '[[', 3))
+
+## set total time to hours
+dt$time <- (hou) + min / 60 + (sec / 3600)
+```
+
+#zero each well subtracting the minimum value from the entire timecourse
+```{r}
+dt0 <- dt
+
+##doing this increases the noise in the first few timpoints, remove the first 3 hours, or 6 timepoints. 
+#dt0[-(1:6),]
+
+##subtract the minimum value of each well from all timpoints in the well. The ensures the lowest value in each well is zero.
+#dt0[-1] <- lapply(dt0[-1], function(x) x - min(x))
+
+##check that the lowest value is 0
+#apply(dt0,2,min)
+
+dt0
+```
+
+#filter your group's data
+```{r}
+#if you are team 'SaltyBois' run this code:
+dt0 <- subset(dt0, select=c("time",seq(1:100)))
+```
+
+```{r}
+#if your are team 'RELAKS' run this code:
+dt0 <- subset(dt0, select=-c(2:101))
+
+#rename column numbers
+colnames(dt0) <- c("time", seq(1, ncol(dt0)-1))
+```
+
+##wrangle metafile
+This combines the strain and condition information into a new column and adds it to the metafile. Capitalization matters in R.
+```{r}
+unite(mt, "ID", c("strain", "condition"), sep = "+")$ID %>% 
+  str_replace_all(., "\\+$", "") -> ID 
+
+#if you need to edit the manes in any of the wells, for eample you want to change 'dtrmB' to 'mutant', use teh below code  
+  #%>% str_replace_all(., "dtrmB", "mutant") 
+
+#Save new mew metafile as a different variable. This is good practice!
+mt0 <- cbind("variable" = mt$well, ID, mt[-1])
+```
+
+##see what your files look like
+```{r}
+mt0; dt0
+```
+
+##Remove any outliers
+after wehave plotted our raw data, identify any outliers or contaminated blanks and remove them, using the well number/column name.
+```{r}
+##remove rows based on observation (input own row names!!)
+## ext to remove well number 186
+#mt0 <- mt0[!(mt0$variable == 186), ]
+#dt0 <- subset(dt0, select = -c(`186`))
+```
+
+##Convert data from wide to long format
+```{r}
+m_dt <- melt(dt0, id = 'time')
+mtdt <- merge(m_dt, mt0, by = 'variable')
+mtdt$environment <- paste(mtdt$media, mtdt$condition)
+well <- paste(mtdt$variable, mtdt$ID, sep = ' ')
+mtdt <- cbind(well, mtdt)
+
+#clean
+c_mtdt <- mtdt[!(mtdt$ID == ''), ]
+
+#time cutoff - this is a usefull function for graphing and analysis. You might not need to look at the full length of the experiment.  
+t_mtdt <- c_mtdt[!(c_mtdt$time >= 50),]
+
+```
+
+these are the various conditions to vizualize!
+```{r}
+unique(t_mtdt$condition)
+```
+
+##graph all wells to check for outliers:
+```{r, fig.height=12, fig.width=12}
+#setwd(folder)
+#p_gri <-
+  ggplot(t_mtdt, aes(x = time, y = value)) +
+  ggtitle('Growthcurves each well') +
+  xlab('time (h)') + 
+  ylab('Absorbance at 600nm')+
+  geom_line() +
+  scale_y_log10() +
+  facet_wrap(~ well) +
+  #scale_color_viridis('wells', discrete = TRUE) +
+  theme(#legend.position = 'none',
+    plot.title = element_text(face='bold', color='#000000', size=8, angle=0),
+    axis.title.x = element_text(face='bold', color='#000000', size=8, angle=0),
+    axis.title.y = element_text(face='bold', color='#000000', size=8, angle=90),
+    legend.title = element_text(face='bold', color='#000000', size=8, angle=0),
+    axis.text.y = element_text(face='plain', color='#000000', size=8, angle=0),
+    axis.text.x = element_text(face='plain', color='#000000', size=8, angle=0),
+    legend.text = element_text(face='plain', color='#000000', size=8, angle=0))+
+  theme_bw()
+
+#ggsave(p_gri, file = paste(species,'plot_grid_all','_', format(Sys.time(), '%d%m%Y'),'.jpeg',sep = ''), width = 12, height = 12)
+```
+
+##graph a single condition, helps identify outliers
+this graph can also be saved for your posters.
+```{r}
+filter(t_mtdt, condition == "") %>%
+ggplot(., aes(x = time, y = value, color = ID)) + #if you want to know the well number, change color = well
+   ggtitle('Growthcurves in Hfx. volcanii') +
+  xlab('time (h)') + 
+  ylab('Absorbance at 600nm')+
+  geom_line() +
+  scale_y_log10() +
+  scale_color_viridis('strain description', discrete = TRUE) +
+  theme(#legend.position = 'none',
+        plot.title = element_text(face='bold', color='#000000', size=12, angle=0),
+        axis.title.x = element_text(face='bold', color='#000000', size=10, angle=0),
+        axis.title.y = element_text(face='bold', color='#000000', size=10, angle=90),
+        legend.title = element_text(face='bold', color='#000000', size=10, angle=0),
+        axis.text.y = element_text(face='plain', color='#000000', size=10, angle=0),
+        axis.text.x = element_text(face='plain', color='#000000', size=10, angle=0),
+        legend.text = element_text(face='plain', color='#000000', size=10, angle=0))+
+  theme_bw()
+```
+
+##calculate some statistics for the data
+this combines all technical and biological replicates. Note we first average over teh technical replicates, then claculate the standard deviation and 95% confidence interval across the bio replciates. 
+  If you would rather treat all bio and technical replicates the same (which might be better if you had to remove a lot of outliers, use this code:
+  stats <- t_mtdt %>%
+  group_by(ID, strain, environment, time) %>%
+  summarise(
+    reps = length(value),
+    average = mean(value),
+    CI95 = conf_int95(value)) %>%
+  filter(!strain == '')  
+  
+```{r}
+stats <- t_mtdt %>%
+  group_by(ID, strain, environment, media, time, biorep) %>%
+  summarise(
+    reps = length(value),
+    value = mean(value),
+    CI95 = conf_int95(value)) %>%
+  filter(!strain == '') %>%
+  group_by(ID, strain, environment, time, media) %>%
+  summarise(
+    reps = length(value),
+    average = mean(value),
+    CI95 = conf_int95(value), 
+    std_dev = sd(value))
+
+t_mtdt %>%
+  group_by(ID, environment, media, biorep, techrep) %>%
+  summarise(
+    max_OD = max(value),
+    min_OD = min(value)) %>%
+  group_by(ID, environment, media, biorep) %>%
+    summarise(
+    max_OD = mean(max_OD)) %>%
+  group_by(ID, environment, media) %>%
+    summarise(
+    K = mean(max_OD),
+    k_CI95 = conf_int95(max_OD), 
+    k_std_dev = sd(max_OD)) -> max_OD_stats
+
+stats <- merge(stats, max_OD_stats, by = c("ID", "environment", "media"))
+```
+
+```{r}
+ggplot(stats, aes(x = time, y = average, color = environment)) +
+  ggtitle('Growthcurves averaged each condition and seperated in strain') +
+  xlab('time (h)') + 
+  ylab('Absorbance at 600nm')+
+  geom_ribbon(
+    aes(
+      ymin = average - CI95,
+      ymax = average + CI95,
+      fill = environment), color = NA, alpha = 0.3) +
+  geom_line() +
+  scale_y_log10() +
+  facet_grid(strain ~ .) +
+  scale_fill_viridis('condition', discrete = TRUE) +
+  scale_color_viridis('condition', discrete = TRUE) +
+  theme(#legend.position = 'none',
+    plot.title = element_text(face='bold', color='#000000', size=12, angle=0),
+    axis.title.x = element_text(face='bold', color='#000000', size=10, angle=0),
+    axis.title.y = element_text(face='bold', color='#000000', size=10, angle=90),
+    legend.title = element_text(face='bold', color='#000000', size=10, angle=0),
+    axis.text.y = element_text(face='plain', color='#000000', size=10, angle=0),
+    axis.text.x = element_text(face='plain', color='#000000', size=10, angle=0),
+    legend.text = element_text(face='plain', color='#000000', size=10, angle=0))+
+  theme_bw()
+```
+
+```{r}
+stats %>% filter(environment == "YPC " | environment == "YPC 5mM" | environment =="YPC 10mM") %>%
+ggplot(., aes(x = time, y = average, color = strain)) +
+  ggtitle('Growthcurves averaged each strain and seperated in condition') +
+  xlab('time (h)') + 
+  ylab('Absorbance at 600nm')+
+  geom_ribbon(
+    aes(
+      ymin = average - CI95,
+      ymax = average + CI95,
+      fill = strain), color = NA, alpha = 0.3) +
+  geom_line() +
+  scale_y_log10() +
+  facet_grid(environment ~ .) +
+  scale_fill_viridis('strain', discrete = TRUE) +
+  scale_color_viridis('strain', discrete = TRUE) +
+  theme(#legend.position = 'none',
+    plot.title = element_text(face='bold', color='#000000', size=12, angle=0),
+    axis.title.x = element_text(face='bold', color='#000000', size=10, angle=0),
+    axis.title.y = element_text(face='bold', color='#000000', size=10, angle=90),
+    legend.title = element_text(face='bold', color='#000000', size=10, angle=0),
+    axis.text.y = element_text(face='plain', color='#000000', size=10, angle=0),
+    axis.text.x = element_text(face='plain', color='#000000', size=10, angle=0),
+    legend.text = element_text(face='plain', color='#000000', size=10, angle=0))+
+  theme_bw()
+```
+
+#Fit the curves and extract parameters!
+```{r}
+library(growthrates)
+library(plyr)
+```
+
+##use spline fitting to estimate maximum growth rate
+this also gives a starting point to estimate parameters
+```{r}
+pretty_spline_fits <-
+  all_splines(value ~ time | ID + biorep,
+              data = t_mtdt,
+              spar = 0.5)
+
+all_spline_fits <-
+  all_splines(value ~ time | ID + biorep + strain + environment,
+              data = t_mtdt,
+              spar = 0.5)
+
+#Starting parameters for logistic fit
+(coef(pretty_spline_fits) %>%
+  colMeans(.) -> params)
+
+# store results in dataframe
+mumax<- results(all_spline_fits)
+row.names(mumax)<- NULL
+
+# remove blanks
+mumax <- mumax[!mumax$strain=='blank',]
+# remove mumax with rsquared below 0.95 (execution of comment in 264)
+mumax$mumax <- ifelse(mumax$r2 < 0.95, 0, mumax$mumax)
+
+# calculate mean mumax
+mumean<- ddply(mumax,c('ID','strain','environment'), 
+               summarize,
+               reps= length(mumax),
+               OD_mn=mean(y0),
+               OD_sd=sd(y0),
+               mumax_mn=mean(mumax),
+               mumax_sd=sd(mumax))
+
+mumean2 <- merge(mumean, max_OD_stats, by = c('ID','environment'))
+```
+
+##fit curves using logistic or gomphertz model
+```{r}
+## initial parameters and box constraints
+p   <- c(y0 = params[[1]], mumax = params[[2]], K = 0.5)
+
+lower   <- c(y0 = 0, mumax = 1e-6, K = 0.05)
+upper   <- c(y0 = 0.5,   mumax = 0.7,    K = 1.2)
+
+## fit growth models to all data using log transformed residuals
+many_parametric <- all_growthmodels(
+                   value ~ grow_logistic(time, parms) | ID + biorep + strain + environment,
+                   data = t_mtdt,
+                   p = p, lower = lower, upper = upper,
+                   which = c("y0", "mumax", "K"), log = "y", ncores = 2)
+
+many_para_res <- results(many_parametric)
+
+#coef(many_parametric)
+#plot(many_parametric)
+```
+
+comparing non-parametric versus parametric estimations of mumax
+```{r}
+xyplot(mumax ~ environment |strain, data = many_para_res)
+xyplot(mumax ~ environment |strain, data = mumax)
+```
+
+```{r}
+#reorder
+mumean<- mumean[order(mumean$mumax_mn),]
+mumean$ID <- factor(mumean$ID, levels = mumean$ID[order(mumean$environment)])
+
+ggplot(data = mumean, aes(x = ID, y = mumax_mn, fill = strain)) +
+  ggtitle('Mean mumax of bioreps comparison') +
+  xlab('') + 
+  ylab('[mumax]')+
+  geom_bar(stat='identity', alpha= 0.8) +
+  geom_errorbar(aes(ymin=mumax_mn-mumax_sd, ymax=mumax_mn+mumax_sd), width=.2,
+              position=position_dodge(.9))+
+  coord_flip() +
+  theme(plot.title = element_text(face='bold', color='#000000', size=12, angle=0),
+        axis.title.x = element_text(face='bold', color='#000000', size=10, angle=0),
+        axis.title.y = element_text(face='bold', color='#000000', size=10, angle=90),
+        legend.title = element_text(face='bold', color='#000000', size=10, angle=0),
+        axis.text.y = element_text(face='plain', color='#000000', size=10, angle=0),
+        axis.text.x = element_text(face='plain', color='#000000', size=10, angle=0),
+        legend.text = element_text(face='plain', color='#000000', size=10, angle=0))+
+  theme_bw()
+```
+
+
+##Testing for significance
+we can ask if the difference between strain and conditions is significantly difference using a variety of statistical tests. One you are probably familiar with is Student's t-test. 
+
+use the function t.test2 and dataframe mumean2 to test pairwise significance of either max grwoth rate, or max_OD for differences.
+
+example code: t.test2("HV35", "HV73", mumean2, parameter = "k")
+```{r}
+
+```
+
+
+Another common statistical test is ANOVA, or analysis of variance. Using this test, we can dtermine if the varation between groups (e.g. strains and conditions) if greater or less than the varaition within the groups (e.g. varaition within parent strain). It also can test if there is an interaction between the two groups. 
+
+If you are interested in testing several conditons (e.g. mumax and K), look into MANOVA, or multivariate ANOVA. http://www.sthda.com/english/wiki/manova-test-in-r-multivariate-analysis-of-variance
+```{r}
+aov(mumax ~ environment*strain , mumax) -> tmp
+summary(tmp)
+
+##check if assumption of equal variance is correct. use this to identify outliers. 
+#plot(tmp, 1)
+
+##check if assumption of normality is appropriate. use this to identify outliers
+#plot(tmp, 2)
+
+##computes pairwise comparisons and returns adjust p-values
+#TukeyHSD(tmp)
+```
