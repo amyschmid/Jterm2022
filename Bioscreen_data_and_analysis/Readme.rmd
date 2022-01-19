@@ -1,5 +1,0 @@
-Here you can find the R notebooks and raw growth data for 2/22/2019 growth experiment.
-
-  20190222_miniterm_hca.csv	and 20190222_miniterm_hca.xls are raw data from Bioscreen
-  growth_curves_analysis.Rmd is the notebook that we will be using to analyze the data
-  miniterm.Rproj Rstudiion environment at has growth data already loaded
