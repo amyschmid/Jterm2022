@@ -1,0 +1,416 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r, message=FALSE}
+# if necessary, install required packages
+#install.packages("tidyverse", "viridis", "growthcurver", "rstatix", "car")
+
+library(tidyverse) # used for data wrangling
+library(viridis) # nice color palettes that are publication quality
+library(growthcurver) # package used for microbial growth curves
+library(rtatix)
+library(car)
+#library(scales) # helps with visualization
+
+
+```
+
+Data loading!!
+```{r}
+
+#Testing data
+data_file = "MarLP60020241111_13-Nov-2024 14-19-41(Plate 3 - Raw Data).csv"
+data_file = "20241220Plate1Data.csv"
+meta_file = "2023_NCSSM_layout.csv"
+meta_file = "JTermMeta.v2.csv"
+
+#Your file paths here!
+data_file = ""
+meta_file = ""
+
+#Reading the data into R
+data = read_csv(data_file, skip=1)
+meta = read_csv(meta_file)
+```
+
+Data cleaning. We want to remove the first 2 hours of data to reduce some noise in early log/prep phase.
+```{r}
+data_clean = data[-(1:6),] #Remove the first 6 rows of data
+data_t = reshape2::melt(data_clean, id.vars="Time")  #Reshape the data to long format
+data_t = inner_join(data_t, meta, by=c("variable"="Well")) #Join the data with the metadata
+data_t = mutate(data_t, Time = sapply(strsplit(as.character(Time), ":"), function(x) as.double(x[1]) + as.double(x[2])/60)) #Fixing gross time formats
+```
+
+Cleaning any bad outliers in blanks
+```{r}
+filter(data_t, condition=="Hvca", strain=="BLANK") %>%
+    ggplot(aes(x=Time, y=value, color=variable)) +
+    xlab("time(h)") + 
+    ylab("Absorbance at 600nm") + 
+    geom_line() + 
+    scale_color_viridis(discrete=TRUE) + 
+    theme_classic() 
+
+filter(data_t, condition=="Hvca + 0.1% glucose", strain=="BLANK") %>%
+    ggplot(aes(x=Time, y=value, color=variable)) +
+    xlab("time(h)") + 
+    ylab("Absorbance at 600nm") + 
+    geom_line() + 
+    scale_color_viridis(discrete=TRUE) + 
+    theme_classic() 
+```
+
+Take a look at the two plotting commands above. Look at the first line where we have condition=="" and strain=="".
+Try copying the full plotting command and changing the condition and strain to other values present in the metadata.
+This will allow checking for outliers in all your wells. Remember that your condition== and strain== have to match
+exactly to what is in the metadata, including spaces and capitalization.
+
+
+```{r}
+#The following line would get rid of wells A1 and A2. Feel free to add other wells by duplicating the variable statement or change it to otheras as needed
+#Only get rid of wells that are very clearly outliers! We want to keep a breadth of technical variance if possible. 
+#We only have a couple of blanks, so outliers should be very extreme if you want to get rid of them.
+
+
+#data_t = filter(data_t, variable!="A1", variable!="A2")
+```
+
+
+Now lets do some data cleaning. We want to use our blanked wells to normalize our data and we are going to Subtract
+the minimum reading from each well so that we are starting from zero. This should make our comparisons easier since
+they will be on the same scale. 
+```{r}
+keeps_hvca = unique(filter(data_t, strain!="BLANK" & condition=="Hvca")$variable) #Get the names of the wells that were not filtered out
+blanks_hvca = unique(filter(data_t, strain=="BLANK" & condition=="Hvca")$variable) #Get the names of the blank wells that were not filtered out
+data_blanks_hvca = select(data_clean, any_of(blanks_hvca)) #Get the blank data
+blank_means_hvca = rowMeans(data_blanks_hvca) #Calculate the mean of the blanks
+data_with_blank_means_hvca = mutate(data_clean, blank_means = blank_means_hvca) %>% #Add the blank means to the data
+    mutate(across(-Time, ~. - blank_means_hvca)) %>% #Subtract the blank means from the data except time column
+    select(-blank_means) %>% #Get rid of the blank means columns
+    select(Time, any_of(keeps_hvca)) %>% #Get rid of columns that aren't hvca media or time and remove blanks
+    mutate(across(-Time, ~. -min(.)))  #Subtract the minimum value from each column so we are starting from zero
+
+#Do the same thing, except now lets normalize the wells with glucose
+keeps_glucose = unique(filter(data_t, strain !="BLANK" & condition=="Hvca + 0.1% glucose")$variable)
+blanks_glucose = unique(filter(data_t, strain=="BLANK" & condition=="Hvca + 0.1% glucose")$variable)
+data_blanks_glucose = select(data_clean, any_of(blanks_glucose))
+blank_means_glucose = rowMeans(data_blanks_glucose)
+data_with_blank_means_glucose = mutate(data_clean, blank_means = blank_means_glucose) %>% #Add the blank means to the data
+    mutate(across(-Time, ~. - blank_means_glucose)) %>% #Subtract the blank means from the data except time column
+    select(-blank_means) %>%
+    select(any_of(keeps_glucose)) %>% #We can get rid of time since we don't need it duplicated
+    mutate(across(everything(), ~. - min(.)))
+
+# Combine the two datasets and generate a new metafile
+combined_data = bind_cols(data_with_blank_means_hvca, data_with_blank_means_glucose)
+combined_meta = filter(meta, Well %in% unique(c(keeps_hvca, keeps_glucose)))
+
+
+```
+
+We've finished normalzing and cleaning our data up, so now we write it to a file so we can use it later. 
+Normally at least, we'll write it to a file here and then immediately read it in. Once you've run the write
+to file lines, you don't have to run anything above this again (except the library import chunk if you restart R).
+Running this chunk will also clean up all your variables to give us a fresh workspace.
+```{r}
+write_csv(combined_data, "normalized_data_jterm_2024.csv")
+write_csv(combined_meta, "normalized_meta_jterm_2024.csv")
+rm(list=ls())  #Handy shorthand; rm removes the variable given in parenthesis, list=ls() gives all the variables
+```
+
+Checkpoint! Now we read in this files we just wrote out
+
+```{r}
+rm(list=ls())
+meta = read_csv("normalized_meta_jterm_2024.csv")
+data = read_csv("normalized_data_jterm_2024.csv")
+```
+
+
+PCA time! We're going to do some explorartory data analysis to look for some patterns in our data. Also because
+PCA is quick, easy, frequently used, and is cool. Essentially what we are doing is squishing our n-dimensional data,
+where n is the number of time points, into 2D space, plotting it, then looking for clusters and patterns.
+```{R}
+pca_fit = select(data, -Time) %>% #Get rid of the time column
+    t() %>%
+    prcomp(center=TRUE, scale=TRUE) #Center and scale the data, then do the PCA
+
+```
+
+First we plot a bar graph of the eigenvalues. Basically, this tells us how much 
+variance is explained by each prinicipal component, or, dimension. Since we are plotting
+in 2 dimensions, we would really like if most of the variance is explained by the first 2.
+```{r}
+tidy(pca_fit, matrix="eigenvalues") %>% 
+    ggplot(aes(PC, percent)) + 
+    geom_col(, fill="steelblue", alpha=.8) +
+    scale_x_continuous(breaks=1:10, limits=c(0,10))
+```
+
+Next, we plot the actual PCA. Does the data seem to cluster as you would expect?
+```{r}
+augment(pca_fit, meta) %>%
+    mutate(strain_condition = paste(strain, condition, sep=" ")) %>%
+    ggplot(aes(.fittedPC1, .fittedPC2, color=strain_condition)) +
+    geom_point()
+```
+
+More data cleaning and getting our data into long format. Note the last line where we are doing 
+a filter. This is removing all time points after (currently) 72 hours. We are mainly interested in
+modelling exponential phase growth, so we don't need a ton of stationary phase time points.
+Plus, the data gets really messy due to evaporation, cell death, etc. around this time. 
+Come back here later once you've seen the graphs and choose a more appropriate cutoff than 72 if needed.
+
+```{r}
+
+data_long = reshape2::melt(data, id.vars="Time") %>%
+    inner_join(meta, by=c("variable"="Well")) %>%
+    mutate(Time = sapply(strsplit(as.character(Time), ":"), function(x) as.double(x[1]) + as.double(x[2])/60)) %>% #Fixing gross time formats
+    mutate(strain_condition = paste(strain, condition, sep=" ")) %>% #Make a new column that is the strain and condition combined   
+    filter(Time < 72) #Replace this 72 hours with a more accurate number
+```
+
+Lets try to do some plotting.
+```{r}
+mutate(data_long, strain_condition_biorep_techrep = paste(strain, condition, biorep, techrep, sep=" ")) %>%
+    ggplot(aes(x=Time, y=value, color=strain_condition, group=strain_condition_biorep_techrep)) +
+    geom_line() 
+```
+
+Okay, thats a lot of lines. Let's try and make this a bit more readable. Remember that we have
+two kinds of replicates, biological and technical. Bio reps represent different colonies of the same
+species from a plate and they represent biological diversity in the population. Technical replicates
+are repeated measurements of the same colony and they represent the precision of our machine. Generally,
+we only care about technical variation in terms of correcting for it but biological variation is important.
+
+
+```{r}
+stats = group_by(data_long, Time, strain, condition, strain_condition, biorep) %>%
+    summarize(tech_mean = mean(value), tech_n = n())
+
+mutate(stats, strain_condition_biorep = paste(strain, condition, biorep, sep=" ")) %>%
+    ggplot( aes(x=Time, y=tech_mean, color=strain_condition, group=strain_condition_biorep)) +
+    geom_line() 
+```
+
+One third of the lines, so defintely better. Lets try to show one line for each of our 4 strain-condition
+pairs. What we don't want to do is only average our bioreps together, because then we lose the biological
+variablity. Instead, lets plot the mean as a line and shade around it with the 95% CI. 
+What might it mean for your interpretation if the confidence intervals were very large, or very small??
+```{r}
+stats2 = group_by(stats, Time, strain, condition,strain_condition) %>%
+    summarize(bio_mean = mean(tech_mean), bio_95_cinf = 1.96*sd(tech_mean)/sqrt(n())) #Calculate the 95% CI
+ggplot(stats2, aes(x=Time, y=bio_mean, color=strain_condition)) +
+    geom_line() + 
+    geom_ribbon(aes(ymin=bio_mean-bio_95_cinf, ymax=bio_mean+bio_95_cinf, fill=strain_condition, color=NULL), alpha=.2 ) + 
+    theme_classic() + 
+    xlab('Time (h)') +
+    ylab('Absorbance at 600nm') + 
+    scale_fill_viridis(discrete=TRUE) + 
+    scale_color_viridis(discrete=TRUE)
+```
+
+One more step for plotting, lets log transform our data. Since our growth is exponential, 
+this makes the plot look a bit nicer. Since our data includes zeros, we add 1 to all values to
+avoid log(0) errors.
+
+```{r}
+ggplot(stats2, aes(x=Time, y=log10(bio_mean+1), color=strain_condition)) +
+    geom_line() + 
+    geom_ribbon(aes(ymin=log10(bio_mean-bio_95_cinf+1), ymax=log10(bio_mean+bio_95_cinf+1), fill=strain_condition, color=NULL), alpha=.2 ) + 
+    theme_classic() + 
+    xlab('Time (h)') +
+    ylab('log10(Optical Density)') + 
+    scale_fill_viridis(discrete=TRUE) + 
+    scale_color_viridis(discrete=TRUE)
+```
+
+Now its your turn. For your conclusions, you might not like to have all 4 strain/conditions on the same plot.
+You also might not like the colors, labels, scales, etc. Work with your instructor if you have questions and try to make
+some plots that you think are poster quality. One first step I would reccomend is adding a title.
+
+
+Now its time to actually model the growth curve. Up until now, we've been plotting essentially raw data and a few
+summary statistics. Now we are going to fit a paramatric model to our data. Think, having a bunch of linear data points and 
+fitting a y=mx+b line to them. We are going to do the same thing, but with a more complex model that can handle growth curves.
+This lets us pull out the paramaters used to create the curve (think like m or b from a line). These paramaters help us talk about
+the growth curve overall and allow us to make statistical comparisons between strains/conditions.
+
+```{r}
+data_gc = rename(data, time=Time) %>%  #Growthcurver is picky, and doesn't like uppercase Time
+    mutate(time = sapply(strsplit(as.character(time), ":"), function(x) as.double(x[1]) + as.double(x[2])/60)) %>%
+    select(time, any_of(unique(meta$Well))) #Select only the time and the wells we want to model
+gc_fit = SummarizeGrowthByPlate(data_gc, plot_fit=TRUE, plot_file="growth_curver_all_strains.pdf") 
+gc_fit
+```
+
+You should now see a pdf in your current directory called growth_curver_all_strains.pdf. Open it 
+and lets take a look at the growth curves, one for every well. Do they all look reasonable? Are they 
+in line with what you expect to see for a growth curve? If not, what might be going on?
+Also, take a quick look at the output of calling gc_fit. These are a list of paramaters fit for every well.
+Do you remember what they mean? If not, ask your instructor for a refresher.
+
+Now is also a good time to take another look at our time cutoffs. Do we have too much stationary phase? If so,
+go back a few lines and change that time cutoff, then rerun everything up to this point and see how it changes.
+
+```{r}
+models_all = lapply(data_gc[2:31], function(x) SummarizeGrowth(data_gc$time, x))
+#models_all = lapply(data_gc[2:ncol(data_gc)], function(x) SummarizeGrowth(data_gc$time, x))
+#Some fancy R shenanigans to fit a model to ever well. The function to fit to all wells doesn't actually
+#give us the model, just the params so we have to do this the hard way.
+
+
+data_predicted = tibble(time=data_gc$time) 
+for (i in names(data_gc[2:31]))
+{
+    data_predicted[[i]] = predict(models_all[[i]]$model)
+}
+```
+
+Note, this will crash and burn if growthcurver can't fit a model to a well. If this happens and you get an error,
+you need to look back at your plots and see whats going on in that well. You may need to remove it from the analysis but 
+consult with your instructor first.
+
+Now we are just combining our predicted data with our actual data for plotting.
+```{r}
+melt_real = reshape2::melt(data_gc, id.vars="time", value.name="od", variable.name="Well")  #Putting our data in long form
+melt_predicted = reshape2::melt(data_predicted, id.vars="time", value.name="predicted_od", variable.name="Well")
+data_final = inner_join(melt_real, melt_predicted, by=c("time", "Well")) %>%  #Merging real and predicted data
+    left_join(meta, by=c("Well")) %>%  #Merging in the metadata
+    filter(is.na(strain)==FALSE) #Get rid of any wells that don't have metadata
+```
+
+
+Okay, now that we've fit our models, lets plot them and take a look! Most of this wrangling is just a repeat of what
+we did before with the bioreps and techreps. Does it make sense why we are doing this?
+```{r}
+stats3 = mutate(data_final,strain_condition = paste(strain, condition, sep=" ")) %>%
+    group_by( time, strain, condition, strain_condition, biorep) %>%
+    summarize(tech_mean = mean(predicted_od), tech_n = n())
+stats4 = group_by(stats3, time, strain, condition,strain_condition) %>%
+    summarize(bio_mean = mean(tech_mean), bio_95_cinf = ifelse(is.na(1.96*sd(tech_mean)/sqrt(n())), 0, 1.96*sd(tech_mean)/sqrt(n())))  #Calculate the 95% CI and replace invalid numbers with zero
+    #Just a catch if for some reason you only have one good biorep. 
+```
+
+Now we are going to plot them, basically the same as the curves with real data.
+```{r}
+ggplot(stats4, aes(x=time, y=bio_mean, color=strain_condition)) +
+    geom_line() + 
+    geom_ribbon(aes(ymin=bio_mean-bio_95_cinf, ymax=bio_mean+bio_95_cinf, fill=strain_condition, color=NULL), alpha=.2 ) + 
+    theme_classic() + 
+    xlab('Time (h)') +
+    ylab('Absorbance at 600nm') + 
+    scale_fill_viridis(discrete=TRUE) + 
+    scale_color_viridis(discrete=TRUE)
+```
+
+And again, but with log scale this time.
+
+```{r}
+ggplot(stats4, aes(x=time, y=log10(bio_mean+1), color=strain_condition)) +
+    geom_line() + 
+    geom_ribbon(aes(ymin=log10(bio_mean-bio_95_cinf+1), ymax=log10(bio_mean+bio_95_cinf+1), fill=strain_condition, color=NULL), alpha=.2 ) + 
+    theme_classic() + 
+    xlab('Time (h)') +
+    ylab('log10(Optical Density)') + 
+    scale_fill_viridis(discrete=TRUE) + 
+    scale_color_viridis(discrete=TRUE) -> fitted_curve
+
+plot(fitted_curve)
+png("fitted_curves_log_transformed.png")
+plot(fitted_curve)
+dev.off()
+
+```
+
+Now lets look at some paramaters. I'll only focus on auc (area under the curve) but I would encourage you to look at some of
+the other paramaters you find interesting.
+
+```{r}
+param_df = left_join(gc_fit, meta, by=c("sample" = "Well"))
+
+param_stats1 = group_by(param_df, strain, condition, biorep) %>%
+    summarize(tech_auc = mean(auc_l), tech_n = n())
+param_stats2 = group_by(param_stats1, condition, biorep) %>%
+    summarize(ratio_auc = tech_auc[strain=="trmB"] / tech_auc[strain=="H26"])
+param_stats3 = group_by(param_stats2, condition) %>%
+    summarize(ratio_auc_mean = mean(ratio_auc), ratio_auc_sd = sd(ratio_auc))
+
+```
+
+Now lets plot the ratio of our AUCs. We are normalizing to the parent strain, so we would expect the ratio of trmB/parent to be 1 if there
+is no difference between strains. In addition, lets plot some error bars to see how confident we are in our ratio. Our data technically isn't paired
+so this is more heuristic but if our error bars overalap 1, its a good sign there is no signficant effect of strain in our data. Like before, try and play
+around with this command with the help of your instructor to tailor this graph to your liking. Running this chunk will automatically save the plot
+in your working directory.
+```{r}
+ggplot(param_stats3, aes(x=condition, y=ratio_auc_mean)) +
+    geom_bar(stat="identity", aes(fill=condition)) + 
+    geom_hline(yintercept=1, linetype="dashed", alpha=.3) + 
+    geom_errorbar(aes(ymin=ratio_auc_mean-ratio_auc_sd, ymax=ratio_auc_mean+ratio_auc_sd), width=.2) +
+    ylab(expression("AUC"["trmB"/" parent"])) + 
+    theme_bw() -> growth_diff_bar
+png("auc_ratio_bar_graph.png")
+plot(growth_diff_bar)
+dev.off()
+```
+
+
+Now lets do some t-tests. This puts a bit of statstical rigour beyond just eyeballing error bars. Remember the assumptions of a t-test: 
+1. The data must be normally distributed
+2. The data must have equal variance
+3. The data must be independent
+
+We are going to check the first assumption with a qqplot. If the data is normal, it should fall roughly along the line, with maybe some wiggling at the end.
+Note that we only have 3 data points per condition (and we are checking the differences between strains, so in hvca, trmb-parent) so its hard to say 
+if its really normal but we can at least check if something looks really gross. Plus, its good practice.
+
+The second assumption is a bit trickier. We can do an f-test for equal variance but with only 3 data points its not super powerful. 
+Luckily, t-tests are pretty robust to this assumption. Even more luckily, there is a t-test variant called welch's t-test that doesn't assume
+equal variance at the cost of a bit of power. It's a bit safer and R does this automatically for us since it assumes most people don't check
+their assumptions before testing.
+
+The third assumption is satistified from our experimental design. We have 3 bioreps per condition which are independent samples of the population.
+This is probably the most important assumption to satisfy. The others we can fudge a bit or use other, less powerful tests to account for, but no
+amount of fancy math can fix a bad experimental design. When you design your own experiments, always be sure to think ahead to the analysis you want to do
+before you pick up your pippette.
+```{r}
+t_stats1 = group_by(param_df, strain, condition, biorep) %>%
+    summarize(tech_auc = mean(auc_l), tech_n = n())
+t_stats2 = group_by(t_stats1, condition, biorep) %>%
+    summarize(diff_auc = tech_auc[strain=="trmB"] - tech_auc[strain=="H26"])
+
+for (i in 1:length(unique(t_stats2$condition)))
+{
+    cond = unique(t_stats2$condition)[i]
+    car::qqp(filter(t_stats2, condition==cond)$diff_auc)}
+```
+Normallity looks good? Or as good as it will with the 3 data points. Now lets do the t-tests. We are going to do 2, one for each condition asking if the strain
+is different given the media type. IE, is trmB different from h26 in hvca media. For us, take a look at the number called p.signif. This is your p-value.
+Remember that the interpretation here is that our null hypothesis is, on average, the distribution of AUCs for trmB and H26 are the same. So if randomly sample
+an AUC from trmB and H26 and take the difference, we would expect it to be zero *on average*. In practice, we are only taking 3 data point samples, the our average
+won't be exactly zero due to noise, even if our null hypothesis is true. The p-value, then is the probability that we would see a difference at least as extreme
+as the one we observed if the null hypothesis is true. If this probability is small (by convention <.05, but this is arbitrary), we argue that we are pretty unllikely
+to observe a sample like we did given a true null hypothesis and we reject the null hypothesis. 
+
+Tl:dr, p value <.05 suggests a significant difference between strains. While this difference may be mathemtially significant, that is, we can discern a difference through
+the noise, I leave it to you to decide if the difference is meaningful.
+
+
+```{r}
+hvca_data=filter(t_stats1, condition=="Hvca") %>% ungroup()
+rstatix::t_test(hvca_data, tech_auc ~ strain) %>% add_significance()
+```
+
+
+```{r}
+glucose_data=filter(t_stats1, condition=="Hvca + 0.1% glucose") %>% ungroup()
+rstatix::t_test(glucose_data, tech_auc ~ strain) %>% add_significance()
+```
+
+
+As a challenge, we tested the difference between strains given media. Can you try and test the difference between media given strain?
+IE, if strain==trmb, is there a difference in growth in the media conditions?
