@@ -1,0 +1,97 @@
+Group,Well,strain,condition,biorep,techrep
+,A1,,,,
+,A2,,,,
+,A3,,,,
+,A4,,,,
+,A5,,,,
+,A6,,,,
+,A7,,,,
+,A8,,,,
+,A9,,,,
+,A10,,,,
+,A11,,,,
+,A12,,,,
+,B1,,,,
+,B2,,,,
+,B3,,,,
+,B4,,,,
+,B5,,,,
+,B6,,,,
+,B7,,,,
+,B8,,,,
+,B9,,,,
+,B10,,,,
+,B11,,,,
+,B12,,,,
+,C1,,,,
+,C2,BLANK,Hvca,,
+,C3,BLANK,Hvca,,
+,C4,BLANK,Hvca,,
+,C5,trmB,Hvca,1,1
+,C6,trmB,Hvca,1,2
+,C7,trmB,Hvca,1,3
+,C8,trmB,Hvca,2,1
+,C9,trmB,Hvca,2,2
+,C10,trmB,Hvca,2,3
+,C11,,,,
+,C12,,,,
+,D1,,,,
+,D2,trmB,Hvca,3,1
+,D3,trmB,Hvca,3,2
+,D4,trmB,Hvca,3,3
+,D5,H26,Hvca,1,1
+,D6,H26,Hvca,1,2
+,D7,H26,Hvca,1,3
+,D8,H26,Hvca,2,1
+,D9,H26,Hvca,2,2
+,D10,H26,Hvca,2,3
+,D11,,,,
+,D12,,,,
+,E1,,,,
+,E2,H26,Hvca,3,1
+,E3,H26,Hvca,3,2
+,E4,H26,Hvca,3,3
+,E5,BLANK,Hvca + 0.1% glucose,,
+,E6,BLANK,Hvca + 0.1% glucose,,
+,E7,BLANK,Hvca + 0.1% glucose,,
+,E8,trmB,Hvca + 0.1% glucose,1,1
+,E9,trmB,Hvca + 0.1% glucose,1,2
+,E10,trmB,Hvca + 0.1% glucose,1,3
+,E11,,,,
+,E12,,,,
+,F1,,,,
+,F2,trmB,Hvca + 0.1% glucose,2,1
+,F3,trmB,Hvca + 0.1% glucose,2,2
+,F4,trmB,Hvca + 0.1% glucose,2,3
+,F5,trmB,Hvca + 0.1% glucose,3,1
+,F6,trmB,Hvca + 0.1% glucose,3,2
+,F7,trmB,Hvca + 0.1% glucose,3,3
+,F8,H26,Hvca + 0.1% glucose,1,1
+,F9,H26,Hvca + 0.1% glucose,1,2
+,F10,H26,Hvca + 0.1% glucose,1,3
+,F11,,,,
+,F12,,,,
+,G1,,,,
+,G2,H26,Hvca + 0.1% glucose,2,1
+,G3,H26,Hvca + 0.1% glucose,2,2
+,G4,H26,Hvca + 0.1% glucose,2,3
+,G5,H26,Hvca + 0.1% glucose,3,1
+,G6,H26,Hvca + 0.1% glucose,3,2
+,G7,H26,Hvca + 0.1% glucose,3,3
+,G8,,,,
+,G9,,,,
+,G10,,,,
+,G11,,,,
+,G12,,,,
+,H1,,,,
+,H2,,,,
+,H3,,,,
+,H4,,,,
+,H5,,,,
+,H6,,,,
+,H7,,,,
+,H8,,,,
+,H9,,,,
+,H10,,,,
+,H11,,,,
+,H12,,,,
